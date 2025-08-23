@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+venv/
+env/
+
+# uv files
+.uv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+
+# Generated data files
+*_processed.csv
+sample_data.csv
+test_data.csv
+
+# Temporary files
+*.tmp
+*.temp
+*.log

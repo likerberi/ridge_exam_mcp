@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ridge-analysis": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server/server.py"],
+      "cwd": "c:/Users/우리집/project/ridge",
+      "env": {}
+    }
+  }
+}
