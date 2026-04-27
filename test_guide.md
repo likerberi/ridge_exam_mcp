@@ -1,47 +1,80 @@
-# MCP 서버 테스트 스크립트
+# MCP 서버 테스트 가이드
 
-이 스크립트는 릿지 분석 MCP 서버의 기능을 테스트합니다.
+이 가이드는 소규모 회계법인의 이상치 탐지 시나리오를 기준으로 MCP 서버를 검증하는 흐름입니다.
 
-## 사용 가능한 도구:
+## 테스트 시나리오
 
-### 1. create_sample_data
+목표는 비정형 재무 CSV를 수작업으로 전수 검토하던 흐름을, Ridge 기반 우선순위 검토 흐름으로 바꾸는 것입니다.
+
+## 도구별 예시
+
+### 1. 회계형 샘플 데이터 생성
+
 ```python
-# 샘플 데이터 생성
 create_sample_data("test_data.csv", n_samples=200)
 ```
 
-### 2. load_data 
+### 2. 데이터 로드 및 기본 정보 확인
+
 ```python
-# 데이터 로드 및 기본 정보 확인
-load_data("test_data.csv")
+load_data("mcp_server/test_data.csv")
 ```
 
-### 3. preprocess_data
-```python 
-# 데이터 전처리 (결측치 제거 및 표준화)
-preprocess_data("test_data.csv", target_column="target")
-```
+### 3. expected_audit_score 기준 전처리
 
-### 4. ridge_analysis
 ```python
-# 릿지 회귀 분석 수행
-ridge_analysis("test_data_processed.csv", target_column="target", alpha=1.0)
+preprocess_data("mcp_server/test_data.csv", target_column="expected_audit_score")
 ```
 
-### 5. visualize_ridge_results
+### 4. Ridge 단독 분석
+
 ```python
-# 결과 시각화
-visualize_ridge_results("test_data_processed.csv", target_column="target", alpha=1.0)
+ridge_analysis(
+	"mcp_server/test_data_processed.csv",
+	target_column="expected_audit_score",
+	alpha=3.0,
+)
 ```
 
-## Claude Desktop에서 사용법:
+### 5. OLS vs Ridge 비교와 이상치 우선순위화
 
-1. "샘플 데이터를 생성해주세요"
-2. "데이터를 로드하고 기본 정보를 알려주세요"  
-3. "데이터를 전처리해주세요"
-4. "릿지 회귀 분석을 실행해주세요"
-5. "결과를 시각화해주세요"
+```python
+compare_ols_vs_ridge(
+	"mcp_server/test_data_processed.csv",
+	target_column="expected_audit_score",
+	alpha=3.0,
+	top_n=8,
+)
+```
 
-## 실제 CSV 파일 사용:
-- 본인의 CSV 파일 경로를 지정하여 분석 가능
-- 타겟 컬럼명을 정확히 입력 필요
+### 6. 결과 시각화
+
+```python
+visualize_ridge_results(
+	"mcp_server/test_data_processed.csv",
+	target_column="expected_audit_score",
+	alpha=3.0,
+)
+```
+
+## Claude Desktop 프롬프트 예시
+
+1. 샘플 회계 데이터를 생성해줘
+2. 생성한 CSV를 읽고 컬럼, 결측치, 샘플 행을 요약해줘
+3. expected_audit_score를 타겟으로 전처리해줘
+4. OLS와 Ridge를 비교해서 왜 Ridge가 더 적합한지 설명해줘
+5. 상위 8개 이상치 후보만 우선 검토할 수 있게 표로 정리해줘
+6. 예측 결과와 잔차 플롯도 보여줘
+
+## 검증 포인트
+
+- 다중공선성 요약값이 반환되는지 확인
+- OLS 대비 Ridge 성능 차이가 수치로 보이는지 확인
+- top_anomalies에 검토 우선순위가 높은 행이 정렬되어 있는지 확인
+- review_workflow에서 before/after 검토 건수 축소가 계산되는지 확인
+
+## 실제 CSV 사용 시 주의점
+
+- 타겟 컬럼은 수치형이어야 합니다.
+- 전처리 단계에서 결측치가 제거되므로, 제거 행 수를 함께 확인하는 것이 좋습니다.
+- 회계사가 검토할 수 있도록 top_n을 5~15 사이로 두면 운영하기 쉽습니다.
