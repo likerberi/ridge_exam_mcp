@@ -3,7 +3,7 @@
     "ridge-analysis": {
       "command": "uv",
       "args": ["run", "python", "mcp_server/server.py"],
-      "cwd": "c:/Users/우리집/project/ridge",
+      "cwd": "<YOUR_PROJECT_PATH>/ridge",
       "env": {}
     }
   }

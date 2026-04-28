@@ -1,5 +1,7 @@
 # Ridge MCP Server
 
+Python MCP server for ridge-based accounting anomaly analysis in Claude Desktop.
+
 소규모 회계법인에서 비정형 재무 데이터를 수작업으로 훑으며 이상치를 찾던 흐름을, Claude Desktop 안에서 자연어로 실행 가능한 분석 워크플로로 바꾼 Ridge 기반 MCP 서버입니다.
 
 ## 문제 정의
@@ -86,11 +88,13 @@ Claude Desktop 설정 파일에 아래 서버를 추가합니다.
     "ridge-analysis": {
       "command": "uv",
       "args": ["run", "python", "mcp_server/server.py"],
-      "cwd": "/absolute/path/to/ridge_exam_mcp"
+      "cwd": "<YOUR_PROJECT_PATH>/ridge_exam_mcp"
     }
   }
 }
 ```
+
+`claude_desktop_config.json` 예시 파일도 동일한 플레이스홀더를 사용하므로, 실제 사용 시 본인 환경의 절대 경로로 바꿔야 합니다.
 
 설정 후 Claude Desktop을 재시작합니다.
 
@@ -106,13 +110,15 @@ Claude Desktop 설정 파일에 아래 서버를 추가합니다.
 
 ## 제공 도구
 
+현재 MCP 서버는 아래 6개 도구를 제공합니다.
+
 | 도구명 | 설명 | 주요 매개변수 |
 |--------|------|---------------|
 | create_sample_data | 다중공선성이 있는 회계형 샘플 데이터 생성 | filename, n_samples |
 | load_data | CSV 파일 로드 및 기본 정보 확인 | filepath |
 | preprocess_data | 결측치 제거 및 수치 데이터 표준화 | filepath, target_column |
-| ridge_analysis | Ridge 회귀 모델 훈련 및 평가 | filepath, target_column, alpha |
-| compare_ols_vs_ridge | OLS 대비 Ridge 성능 비교와 이상치 우선순위화 | filepath, target_column, alpha, top_n |
+| ridge_analysis | Ridge 회귀 모델 훈련 및 평가 | filepath, target_column, test_size, alpha |
+| compare_ols_vs_ridge | OLS 대비 Ridge 성능 비교와 이상치 우선순위화 | filepath, target_column, test_size, alpha, top_n |
 | visualize_ridge_results | 실제값 vs 예측값, 잔차 플롯 생성 | filepath, target_column, alpha |
 
 ## 직접 실행
