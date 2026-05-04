@@ -100,25 +100,99 @@ Claude Desktop 설정 파일에 아래 서버를 추가합니다.
 
 ## Claude Desktop에서 쓰는 방법
 
-다음처럼 바로 요청할 수 있습니다.
+### 인풋 → 아웃풋 가이드
 
-1. 샘플 회계 데이터를 생성해줘
-2. 방금 만든 데이터를 로드해서 결측치와 컬럼 구성을 알려줘
-3. expected_audit_score를 기준으로 전처리해줘
-4. OLS와 Ridge를 비교하고 이상치 후보 상위 8건을 보여줘
-5. 결과를 시각화해줘
+각 단계에서 무엇을 준비하고 무엇이 돌아오는지 정리합니다.
+
+---
+
+#### 1단계. 샘플 데이터 생성 (처음 시작하는 경우)
+
+| | 내용 |
+|---|---|
+| **인풋** | 없음 (또는 파일명, 생성할 행 수) |
+| **요청 예시** | `샘플 회계 데이터를 200행으로 만들어줘` |
+| **아웃풋** | 생성된 CSV 파일 경로, 컬럼 목록, 삽입된 이상치 행 번호, 결측치 현황 |
+
+> 실제 데이터가 있으면 이 단계를 건너뛰고 2단계부터 시작합니다.
+
+---
+
+#### 2단계. 데이터 로드 및 구조 확인
+
+| | 내용 |
+|---|---|
+| **인풋** | CSV 파일 경로 |
+| **요청 예시** | `mcp_server/test_data.csv 파일을 읽고 컬럼과 결측치 현황을 알려줘` |
+| **아웃풋** | 전체 행/열 수, 컬럼명 목록, 컬럼별 데이터 타입, 결측치 개수, 상위 5행 미리보기 |
+
+---
+
+#### 3단계. Benford's Law 검증 (데이터 조작 여부 1차 점검)
+
+| | 내용 |
+|---|---|
+| **인풋** | CSV 파일 경로, (선택) 점검할 컬럼명 |
+| **요청 예시** | `expense_claims와 vendor_spend에 Benford 검증을 해줘` |
+| **아웃풋** | 컬럼별 `PASS / WARNING / CRITICAL` 플래그, 카이제곱 통계량, p-value, 끝자리 0 집중 비율(round number bias) |
+
+> `CRITICAL` (p < 0.01): 데이터 조작 또는 비정상 입력 강하게 의심
+> `WARNING` (p < 0.05): 추가 확인 권장
+> `PASS`: 정상 분포 범위
+
+---
+
+#### 4단계. 전처리
+
+| | 내용 |
+|---|---|
+| **인풋** | CSV 파일 경로, 예측 기준이 될 타겟 컬럼명 |
+| **요청 예시** | `expected_audit_score를 타겟으로 전처리해줘` |
+| **아웃풋** | 전처리된 CSV 파일 경로(`_processed.csv`), 제거된 결측치 행 수, 표준화 적용 컬럼 목록 |
+
+---
+
+#### 5단계. OLS vs Ridge 비교 및 이상치 우선순위화
+
+| | 내용 |
+|---|---|
+| **인풋** | 전처리된 CSV 파일 경로, 타겟 컬럼명, (선택) 상위 몇 건 볼지 |
+| **요청 예시** | `이상치 후보 상위 8건을 우선순위 순으로 정리해줘` |
+| **아웃풋** | 자동 선택된 최적 alpha 값, OLS/Ridge 각각의 MSE·R², 계수 L2 norm 비교, 잔차 기준 이상치 후보 테이블(행 번호·실제값·예측값·잔차·z-score), 검토량 절감률 |
+
+> alpha는 자동으로 교차검증(RidgeCV)으로 선택됩니다. 직접 지정도 가능합니다.
+
+---
+
+#### 6단계. 시각화
+
+| | 내용 |
+|---|---|
+| **인풋** | 전처리된 CSV 파일 경로, 타겟 컬럼명 |
+| **요청 예시** | `예측 결과와 잔차 플롯을 보여줘` |
+| **아웃풋** | 실제값 vs 예측값 산점도, 잔차 플롯 (이미지) |
+
+---
+
+### 전체 흐름 요약
+
+```
+실제 CSV 보유 시:  로드 → Benford 검증 → 전처리 → 비교 분석 → 시각화
+처음 시작하는 경우: 샘플 생성 → 로드 → 전처리 → 비교 분석 → 시각화
+```
 
 ## 제공 도구
 
-현재 MCP 서버는 아래 6개 도구를 제공합니다.
+현재 MCP 서버는 아래 7개 도구를 제공합니다.
 
 | 도구명 | 설명 | 주요 매개변수 |
 |--------|------|---------------|
 | create_sample_data | 다중공선성이 있는 회계형 샘플 데이터 생성 | filename, n_samples |
 | load_data | CSV 파일 로드 및 기본 정보 확인 | filepath |
+| benford_analysis | Benford's Law 기반 데이터 조작 여부 검증 | filepath, columns |
 | preprocess_data | 결측치 제거 및 수치 데이터 표준화 | filepath, target_column |
-| ridge_analysis | Ridge 회귀 모델 훈련 및 평가 | filepath, target_column, test_size, alpha |
-| compare_ols_vs_ridge | OLS 대비 Ridge 성능 비교와 이상치 우선순위화 | filepath, target_column, test_size, alpha, top_n |
+| ridge_analysis | Ridge 회귀 모델 훈련 및 평가 (alpha 자동 선택) | filepath, target_column, test_size, alpha |
+| compare_ols_vs_ridge | OLS 대비 Ridge 성능 비교와 이상치 우선순위화 (alpha 자동 선택) | filepath, target_column, test_size, alpha, top_n |
 | visualize_ridge_results | 실제값 vs 예측값, 잔차 플롯 생성 | filepath, target_column, alpha |
 
 ## 직접 실행

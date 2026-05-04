@@ -1,8 +1,8 @@
 from mcp.server.fastmcp import FastMCP
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import Ridge
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge, RidgeCV, LinearRegression
+from scipy import stats
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
@@ -104,6 +104,85 @@ def _top_anomalies(indexes, actual_values, predicted_values, top_n: int) -> list
 
     return anomalies
 
+_BENFORD_EXPECTED = {
+    d: np.log10(1 + 1 / d) for d in range(1, 10)
+}
+
+
+def _first_digit(series: pd.Series) -> pd.Series:
+    """양수 값에서 첫째 자리 수 추출"""
+    abs_vals = series.dropna().abs()
+    abs_vals = abs_vals[abs_vals > 0]
+    return abs_vals.astype(str).str.replace(r"^0\.", "", regex=True).str.lstrip("0").str[0].astype(int)
+
+
+@mcp.tool()
+def benford_analysis(filepath: str, columns: list = None) -> dict:
+    """Benford's Law 기반 첫째 자리 수 분포 검증 — 데이터 조작 여부 플래그"""
+    try:
+        if not os.path.exists(filepath):
+            return {"error": f"파일을 찾을 수 없습니다: {filepath}"}
+
+        df = pd.read_csv(filepath)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        if columns:
+            invalid = [c for c in columns if c not in numeric_cols]
+            if invalid:
+                return {"error": f"수치형이 아니거나 없는 컬럼: {invalid}"}
+            target_cols = columns
+        else:
+            target_cols = numeric_cols
+
+        expected_probs = np.array([_BENFORD_EXPECTED[d] for d in range(1, 10)])
+        results = {}
+
+        for col in target_cols:
+            first_digits = _first_digit(df[col])
+            if len(first_digits) < 30:
+                results[col] = {"skipped": "샘플 수 부족 (최소 30개 필요)"}
+                continue
+
+            observed_counts = np.array([
+                (first_digits == d).sum() for d in range(1, 10)
+            ])
+            expected_counts = expected_probs * len(first_digits)
+
+            chi2_stat, p_value = stats.chisquare(observed_counts, f_exp=expected_counts)
+
+            # Round number bias: 끝자리 0 집중 비율
+            non_zero = df[col].dropna()
+            non_zero = non_zero[non_zero != 0]
+            round_bias_pct = float((non_zero % 10 == 0).sum() / len(non_zero) * 100) if len(non_zero) > 0 else 0.0
+
+            observed_dist = {str(d): int(observed_counts[d - 1]) for d in range(1, 10)}
+            expected_dist = {str(d): round(float(expected_counts[d - 1]), 2) for d in range(1, 10)}
+
+            flag = "CRITICAL" if p_value < 0.01 else ("WARNING" if p_value < 0.05 else "PASS")
+
+            results[col] = {
+                "n": int(len(first_digits)),
+                "chi2_stat": round(float(chi2_stat), 4),
+                "p_value": round(float(p_value), 6),
+                "flag": flag,
+                "round_number_bias_pct": round(round_bias_pct, 2),
+                "observed_dist": observed_dist,
+                "expected_dist": expected_dist,
+            }
+
+        flagged = [col for col, r in results.items() if isinstance(r, dict) and r.get("flag") in ("CRITICAL", "WARNING")]
+
+        return {
+            "success": True,
+            "columns_analyzed": len(target_cols),
+            "flagged_columns": flagged,
+            "results": results,
+            "note": "p_value < 0.05 → Benford 분포 이탈, 조작 또는 비정상 데이터 의심",
+        }
+    except Exception as e:
+        return {"error": f"Benford 분석 중 오류 발생: {str(e)}"}
+
+
 # MCP tool: 데이터 로드
 @mcp.tool()
 def load_data(filepath: str) -> dict:
@@ -170,54 +249,71 @@ def preprocess_data(filepath: str, target_column: str = None) -> dict:
 
 # MCP tool: 릿지 분석
 @mcp.tool()
-def ridge_analysis(filepath: str, target_column: str, test_size: float = 0.2, alpha: float = 1.0) -> dict:
-    """릿지 회귀 분석 수행 및 결과 반환"""
+def ridge_analysis(filepath: str, target_column: str, test_size: float = 0.2, alpha: float = None) -> dict:
+    """릿지 회귀 분석 수행 — alpha 미지정 시 RidgeCV로 자동 선택"""
     try:
         df, X, y = _load_numeric_dataset(filepath, target_column)
 
-        # 훈련/테스트 데이터 분할
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-        
-        # 릿지 회귀 모델 훈련
-        model = Ridge(alpha=alpha)
+
+        if alpha is not None:
+            model = Ridge(alpha=alpha)
+            alpha_mode = "manual"
+        else:
+            cv_alphas = [0.01, 0.1, 0.5, 1.0, 3.0, 10.0, 30.0, 100.0]
+            model = RidgeCV(alphas=cv_alphas, cv=5)
+            alpha_mode = "auto_cv"
+
         model.fit(X_train, y_train)
-        
-        # 예측 및 평가
+        optimal_alpha = float(model.alpha_) if hasattr(model, "alpha_") else float(alpha)
+
         y_train_pred = model.predict(X_train)
         y_test_pred = model.predict(X_test)
-        
-        train_mse = mean_squared_error(y_train, y_train_pred)
-        test_mse = mean_squared_error(y_test, y_test_pred)
-        train_r2 = r2_score(y_train, y_train_pred)
-        test_r2 = r2_score(y_test, y_test_pred)
-        
-        # 계수 정보
-        feature_importance = dict(zip(X.columns, model.coef_))
-        
+
         return {
             "success": True,
-            "model_params": {"alpha": alpha, "test_size": test_size},
-            "coefficients": feature_importance,
+            "model_params": {
+                "alpha": optimal_alpha,
+                "alpha_mode": alpha_mode,
+                "test_size": test_size,
+            },
+            "coefficients": dict(zip(X.columns, [float(v) for v in model.coef_])),
             "intercept": float(model.intercept_),
-            "train_metrics": {"mse": float(train_mse), "r2": float(train_r2)},
-            "test_metrics": {"mse": float(test_mse), "r2": float(test_r2)},
+            "train_metrics": {
+                "mse": float(mean_squared_error(y_train, y_train_pred)),
+                "r2": float(r2_score(y_train, y_train_pred)),
+            },
+            "test_metrics": {
+                "mse": float(mean_squared_error(y_test, y_test_pred)),
+                "r2": float(r2_score(y_test, y_test_pred)),
+            },
             "feature_names": X.columns.tolist(),
-            "data_shape": {"total": df.shape, "features": X.shape, "target": len(y)}
+            "data_shape": {"total": df.shape, "features": X.shape, "target": len(y)},
         }
     except Exception as e:
         return {"error": f"릿지 분석 중 오류 발생: {str(e)}"}
 
 
 @mcp.tool()
-def compare_ols_vs_ridge(filepath: str, target_column: str, test_size: float = 0.2, alpha: float = 1.0, top_n: int = 10) -> dict:
-    """OLS와 Ridge를 비교하고 상위 이상치 후보를 반환"""
+def compare_ols_vs_ridge(filepath: str, target_column: str, test_size: float = 0.2, alpha: float = None, top_n: int = 10) -> dict:
+    """OLS와 Ridge를 비교하고 상위 이상치 후보를 반환 — alpha 미지정 시 RidgeCV로 자동 선택"""
     try:
         _, X, y = _load_numeric_dataset(filepath, target_column)
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
 
         ols_result = _fit_model(LinearRegression(), X_train, X_test, y_train, y_test)
-        ridge_result = _fit_model(Ridge(alpha=alpha), X_train, X_test, y_train, y_test)
+
+        if alpha is not None:
+            ridge_model = Ridge(alpha=alpha)
+            alpha_mode = "manual"
+        else:
+            cv_alphas = [0.01, 0.1, 0.5, 1.0, 3.0, 10.0, 30.0, 100.0]
+            ridge_model = RidgeCV(alphas=cv_alphas, cv=5)
+            alpha_mode = "auto_cv"
+
+        ridge_result = _fit_model(ridge_model, X_train, X_test, y_train, y_test)
+        optimal_alpha = float(ridge_result["model"].alpha_) if hasattr(ridge_result["model"], "alpha_") else float(alpha)
 
         test_mse_reduction = 0.0
         if ols_result["test_metrics"]["mse"] != 0:
@@ -235,7 +331,7 @@ def compare_ols_vs_ridge(filepath: str, target_column: str, test_size: float = 0
 
         return {
             "success": True,
-            "model_params": {"alpha": alpha, "test_size": test_size, "top_n": top_n},
+            "model_params": {"alpha": optimal_alpha, "alpha_mode": alpha_mode, "test_size": test_size, "top_n": top_n},
             "data_summary": {
                 "rows": int(len(X)),
                 "feature_count": int(X.shape[1]),
